@@ -103,12 +103,5 @@ if __name__ == "__main__":
         ground_truth_key="answer_idx",
         pred_key="model_answer_idx",
         pred_content_key="model_response",
-        print_content=False,
-    )
-    eval_jsonl(
-        f"dataset/PubMedQA/PQA-L/ori_pqal_eval_{model}.jsonl",
-        ground_truth_key="final_decision",
-        pred_key="model_decision",
-        pred_content_key="model_response",
         print_content=False, # Whether to print the longest valid and shortest invalid responses
     )
