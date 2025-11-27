@@ -1,6 +1,9 @@
 import re
 
 def build_medqa_messages(question: str, options: dict):
+    """
+    Build messages for MedQA task. (prompt engineering)
+    """
     option_lines = []
     for key in sorted(options.keys()):
         option_lines.append(f"{key}. {options[key]}")
@@ -46,6 +49,10 @@ def build_medqa_messages(question: str, options: dict):
 
 
 def parse_medqa_answer(response: str, options: dict) -> str:
+    """
+    Parse the model response to extract the selected answer option.
+    Raises ValueError if parsing fails.
+    """
     if response is None:
         raise ValueError("The model answers as empty.")
 

@@ -11,6 +11,9 @@ torch.backends.cuda.enable_flash_sdp(True)
 def load_model_and_tokenizer(model_path: str,
                              visible_gpus: str,
                              dtype=torch.bfloat16):
+    """
+    Load model and tokenizer.
+    """
     
     os.environ["CUDA_VISIBLE_DEVICES"] = visible_gpus
 
@@ -39,6 +42,9 @@ def generate_batch(model,
                    tokenizer,
                    conversations,
                    max_tokens: int | None = None):
+    """
+    Generate responses for a batch of conversations.
+    """
     texts = [
         tokenizer.apply_chat_template(
             conv,
@@ -88,6 +94,9 @@ def eval_single_medqa_jsonl(path: str,
                             max_tokens: int | None = None,
                             print_errors: bool = True,
                             record_file: bool = False):
+    """
+    Evaluate the model on a single MedQA JSONL file.
+    """
     data = []
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
@@ -116,6 +125,7 @@ def eval_single_medqa_jsonl(path: str,
             conversations.append(build_prompt_fn(q, opts))
 
         try:
+            # Generate model responses for the batch.
             responses = generate_batch(
                 model=model,
                 tokenizer=tokenizer,
@@ -139,6 +149,7 @@ def eval_single_medqa_jsonl(path: str,
             pbar.update(len(batch_items))
             continue
 
+        # Process model responses for the batch.
         for i, item in enumerate(batch_items):
             idx = start + i
             response = responses[i]
@@ -166,6 +177,7 @@ def eval_single_medqa_jsonl(path: str,
 
     pbar.close()
 
+    # Save all model answers and decisions. (same directory as input file)
     if record_file:
         raw_model_name = getattr(model, "name_or_path", "")
         raw_model_name = raw_model_name.rstrip("/")
@@ -185,6 +197,7 @@ def eval_single_medqa_jsonl(path: str,
                 f.write(json.dumps(item, ensure_ascii=False) + "\n")
         print(f"Saved eval results to {out_path}")
 
+    # Print error details.
     if error_details and print_errors:
         for err in error_details:
             print(f"id:\n{err['idx']}\n")
@@ -192,6 +205,7 @@ def eval_single_medqa_jsonl(path: str,
             print(f"Model response:\n{err['response']}\n")
             print(err["traceback"])
 
+    # Print evaluation summary.
     acc = (correct_cnt / valid_cnt) if valid_cnt > 0 else 0.0
     print(
         f"file: {path}\n"
@@ -208,6 +222,17 @@ def eval_medqa(model_path: str,
                max_tokens: int | None = None,
                print_errors: bool = True,
                record_file: bool = False):
+    """
+    Entrance for evaluating MedQA dataset.
+    
+    model_path: Path to the base model. Also can be an online model name.
+    data_paths: List of paths to MedQA JSONL files.
+    visible_gpus: Comma-separated GPU device ids to use.
+    batch_size: Evaluation batch size.
+    max_tokens: Maximum tokens for generation. If None, use model's max length.
+    print_errors: Whether to print detailed error information of every invalid case.
+    record_file: Whether to save all model answers and decisions to a file.
+    """
 
     model, tokenizer = load_model_and_tokenizer(
         model_path=model_path,

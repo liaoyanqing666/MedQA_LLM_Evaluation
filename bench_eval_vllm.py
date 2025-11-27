@@ -16,6 +16,9 @@ def load_model_and_tokenizer(model_path: str,
                              dtype=torch.bfloat16,
                              enable_lora: bool = False,
                              max_tokens: int | None = None):
+    """
+    Load model and tokenizer.
+    """
     gpu_list = [g.strip() for g in str(visible_gpus).split(",") if g.strip()]
     clean_visible = ",".join(gpu_list) if gpu_list else ""
     if clean_visible:
@@ -60,6 +63,9 @@ def generate_batch(model,
                    conversations,
                    max_tokens: int = None,
                    lora_path: str | None = None):
+    """
+    Generate responses for all conversations.
+    """
     texts = [
         tokenizer.apply_chat_template(
             conv,
@@ -118,6 +124,9 @@ def eval_single_medqa_jsonl(path: str,
                       record_file: bool = False,
                       lora_path: str | None = None):
     data = []
+    """
+    Evaluate the model on a single MedQA JSONL file.
+    """
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -140,6 +149,7 @@ def eval_single_medqa_jsonl(path: str,
         conversations.append(build_prompt_fn(q, opts))
 
     try:
+        # Generate model responses. For vllm, all data are processed in "one" batch.
         responses = generate_batch(
             model=model,
             tokenizer=tokenizer,
@@ -163,6 +173,7 @@ def eval_single_medqa_jsonl(path: str,
         invalid_cnt = total
         valid_cnt = 0
     else:
+        # Process model responses.
         for idx, item in enumerate(data):
             response = responses[idx]
             data[idx]["model_response"] = response
@@ -185,6 +196,7 @@ def eval_single_medqa_jsonl(path: str,
                 })
                 data[idx]["model_answer_idx"] = None
 
+    # Save all model answers and decisions. (same directory as input file)
     if record_file:
         if lora_path is not None:
             raw_model_name = lora_path.rstrip("/")
@@ -207,6 +219,7 @@ def eval_single_medqa_jsonl(path: str,
                 f.write(json.dumps(item, ensure_ascii=False) + "\n")
             print(f"Saved eval results to {out_path}")
 
+    # Print error details.
     if error_details and print_errors:
         for err in error_details:
             print(f"id:\n{err['idx']}\n")
@@ -214,6 +227,7 @@ def eval_single_medqa_jsonl(path: str,
             print(f"Model response:\n{err['response']}\n")
             print(err["traceback"])
 
+    # Print evaluation summary.
     acc = (correct_cnt / valid_cnt) if valid_cnt > 0 else 0.0
     print(
         f"file: {path}\n"
@@ -230,6 +244,17 @@ def eval_medqa(model_path: str,
                print_errors: bool = True,
                record_file: bool = False,
                lora_path: str | None = None):
+    """
+    Entrance for evaluating MedQA dataset.
+    
+    model_path: Path to the base model. Also can be an online model name.
+    data_paths: List of paths to MedQA JSONL files.
+    visible_gpus: Comma-separated GPU device ids to use.
+    max_tokens: Maximum tokens for generation. If None, use model's max length.
+    print_errors: Whether to print detailed error information of every invalid case.
+    record_file: Whether to save all model answers and decisions to a file.
+    lora_path: Optional path to LoRA weights to apply during evaluation.
+    """
 
     model, tokenizer = load_model_and_tokenizer(
         model_path=model_path,
@@ -256,7 +281,7 @@ def eval_medqa(model_path: str,
 
 if __name__ == "__main__":
     eval_medqa(
-        model_path="/nfsdata4/Qwen/Qwen3-32B",# Replace with your local model path/online model name
+        model_path="/nfsdata4/Qwen/Qwen3-32B", # Replace with your local model path/online model name
         # lora_path="models/sft_Qwen3", # Optional: path to LoRA weights
         data_paths=[
             "dataset/MedQA/questions/US/test.jsonl", # USMLE-5options
