@@ -66,10 +66,10 @@ MedQA 数据集来源于 [MedQA 官方仓库](https://github.com/jind11/MedQA)�
 
 4. **(Optional) View the full model outputs**
 
-   If you set `record_file=True` in the previous step, the script will generate a file named `{original_filename}_eval_{model_name}.jsonl` in the same directory, containing the model's complete outputs and parsed results.
+   If you set `record_file=True` in the previous step, the script will generate a file named `{original_filename}_eval_{model_name}.jsonl` in the same directory of benchmark file, containing the model's complete outputs and parsed results.
 
    If you want to recompute accuracy or other metrics, you can run the `jsonl_eval.py` script, set its `path` to the generated file, and run the script to obtain evaluation results.
-=
+
 
 ### File Descriptions:
 
@@ -144,7 +144,7 @@ MedQA 数据集来源于 [MedQA 官方仓库](https://github.com/jind11/MedQA)�
 
 4. **（可选）查看模型全部完整输出**
 
-   在上一步将 `record_file=True` 后，会在相同目录下生成 `{原文件名}_eval_{模型名}.jsonl`，其中包含模型的完整生成内容及解析结果。
+   在上一步将 `record_file=True` 后，会在基准数据集相同目录下生成 `{原文件名}_eval_{模型名}.jsonl`，其中包含模型的完整生成内容及解析结果。
 
    在此基础上，如果你想重新查看模型的正确率等信息，可以运行 `jasonl_eval.py` 脚本，修改其中的 `path` 为对应文件路径，然后运行脚本即可得到评测结果。
 
