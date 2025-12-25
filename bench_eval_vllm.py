@@ -1,8 +1,9 @@
 # Evaluation script for benchmark using vLLM
 import os
 import json
-from re import L
 import traceback
+from collections import Counter
+
 import torch
 from transformers import AutoTokenizer
 from vllm import LLM, SamplingParams
@@ -15,7 +16,7 @@ torch.backends.cuda.enable_flash_sdp(True)
 def load_model_and_tokenizer(model_path: str,
                              visible_gpus: str,
                              dtype=torch.bfloat16,
-                             enable_lora: bool = False,
+                             lora_path: str | None = None,
                              max_tokens: int | None = None):
     """
     Load model and tokenizer.
@@ -46,13 +47,14 @@ def load_model_and_tokenizer(model_path: str,
 
     llm = LLM(
         model=model_path,
-        tokenizer=model_path,
+        tokenizer=lora_path if lora_path else model_path,
         trust_remote_code=True,
         tensor_parallel_size=tp_size,
         dtype=vllm_dtype,
-        enable_lora=enable_lora,
-        gpu_memory_utilization=0.95,
+        enable_lora=lora_path is not None,
+        gpu_memory_utilization=0.90,
         max_model_len=max_tokens,
+        max_lora_rank=64,
     )
 
     llm.name_or_path = model_path
@@ -63,9 +65,11 @@ def generate_batch(model,
                    tokenizer,
                    conversations,
                    max_tokens: int = None,
-                   lora_path: str | None = None):
+                   lora_path: str | None = None,
+                   vote_num: int = 1,
+                   **kwargs):
     """
-    Generate responses for all conversations.
+    Generate vote_num responses for all conversations.
     """
     texts = [
         tokenizer.apply_chat_template(
@@ -81,14 +85,16 @@ def generate_batch(model,
         if engine_cfg is not None and hasattr(engine_cfg, "max_model_len"):
             max_tokens = engine_cfg.max_model_len
         else:
-            max_tokens = 30602
+            max_tokens = 32768
 
+    temperature = kwargs.pop('temperature', 0.0 if vote_num == 1 else 0.5)
     sampling_params = SamplingParams(
-        temperature=0.0,
+        temperature=temperature,
         max_tokens=max_tokens,
-        stop_token_ids=[tokenizer.eos_token_id]
-        if tokenizer.eos_token_id is not None else None,
+        stop_token_ids=[tokenizer.eos_token_id] if tokenizer.eos_token_id is not None else None,
         skip_special_tokens=True,
+        n=vote_num,
+        **kwargs
     )
 
     lora_request = None
@@ -106,14 +112,58 @@ def generate_batch(model,
         lora_request=lora_request,
     )
 
+    # Multi-voting
+    if vote_num > 1:
+        all_responses = []
+        all_finish_reasons = []
+        for out in outputs:
+            responses = []
+            finish_reasons = []
+            for sample in out.outputs:
+                responses.append(sample.text.strip())
+                finish_reasons.append(sample.finish_reason)
+            all_responses.append(responses)
+            all_finish_reasons.append(finish_reasons)
+        return all_responses, all_finish_reasons
+    
+    # Single vote case
     responses = []
+    finish_reasons = []
     for out in outputs:
         if out.outputs:
             text = out.outputs[0].text
+            finish_reason = out.outputs[0].finish_reason
         else:
             text = ""
+            finish_reason = None
         responses.append(text.strip())
-    return responses
+        finish_reasons.append(finish_reason)
+    return responses, finish_reasons
+
+
+def evaluate_with_voting(responses, options, parse_fn):
+    """
+    Parse all output responses and obtain the voted answers.
+    Only for multi-voting routes.
+    """
+    parsed_answers = []
+    valid_answers = []
+    
+    for resp in responses:
+        try:
+            ans = parse_fn(resp, options)
+            parsed_answers.append(ans)
+            valid_answers.append(ans)
+        except Exception:
+            parsed_answers.append(None)
+    
+    if not valid_answers:
+        raise ValueError("All responses failed to parse")
+    
+    counts = Counter(valid_answers)
+    most_common = counts.most_common(1)[0][0]
+    
+    return most_common, parsed_answers
 
 
 def eval_single_medqa_jsonl(path: str,
@@ -123,11 +173,13 @@ def eval_single_medqa_jsonl(path: str,
                       max_tokens: int = None,
                       print_errors: bool = True,
                       record_file: bool = False,
-                      lora_path: str | None = None):
-    data = []
+                      lora_path: str | None = None,
+                      vote_num: int = 1,
+                      **kwargs):
     """
     Evaluate the model on a single MedQA JSONL file.
     """
+    data = []
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -136,7 +188,6 @@ def eval_single_medqa_jsonl(path: str,
             data.append(json.loads(line))
 
     total = len(data)
-
     invalid_cnt = 0
     valid_cnt = 0
     correct_cnt = 0
@@ -149,38 +200,67 @@ def eval_single_medqa_jsonl(path: str,
         opts = item["options"]
         conversations.append(build_prompt_fn(q, opts))
 
-    try:
-        # Generate model responses. For vllm, all data are processed in "one" batch.
-        responses = generate_batch(
-            model=model,
-            tokenizer=tokenizer,
-            conversations=conversations,
-            max_tokens=max_tokens,
-            lora_path=lora_path,
-        )
-    except Exception:
-        tb_str = traceback.format_exc()
-        for idx, item in enumerate(data):
-            error_list.append(idx)
-            error_details.append({
-                "idx": idx,
-                "question": item.get("question", "") + str(item.get("options", "")),
-                "response": None,
-                "traceback": tb_str,
-            })
-            data[idx]["model_response"] = None
-            data[idx]["model_answer_idx"] = None
+    responses, finish_reasons = generate_batch(
+        model=model,
+        tokenizer=tokenizer,
+        conversations=conversations,
+        max_tokens=max_tokens,
+        lora_path=lora_path,
+        vote_num=vote_num,
+        **kwargs
+    )
 
-        invalid_cnt = total
-        valid_cnt = 0
-    else:
-        # Process model responses.
-        for idx, item in enumerate(data):
+    for idx, item in enumerate(data):
+        # Multi-voting
+        if vote_num > 1:
+            item_responses = responses[idx]
+            item_finish_reasons = finish_reasons[idx]
+            
+            for i, (resp, reason) in enumerate(zip(item_responses, item_finish_reasons), 1):
+                data[idx][f"model_response_{i}"] = resp
+            
+            try:
+                final_answer, parsed_answers = evaluate_with_voting(
+                    item_responses, 
+                    item["options"],
+                    parse_model_answer
+                )
+                
+                for i, ans in enumerate(parsed_answers, 1):
+                    data[idx][f"model_answer_idx_{i}"] = ans
+                
+                data[idx]["model_answer_idx"] = final_answer
+                valid_cnt += 1
+                
+                if str(final_answer) == str(item["answer_idx"]):
+                    correct_cnt += 1
+            except Exception as e:
+                invalid_cnt += 1
+                error_list.append(idx)
+                tb_str = traceback.format_exc()
+                error_details.append({
+                    "idx": idx,
+                    "question": item.get("question", "") + str(item.get("options", "")),
+                    "responses": item_responses,
+                    "traceback": tb_str,
+                })
+                
+                if 'parsed_answers' in locals():
+                    for i, ans in enumerate(parsed_answers, 1):
+                        data[idx][f"model_answer_idx_{i}"] = ans
+                else:
+                    for i in range(1, vote_num + 1):
+                         data[idx][f"model_answer_idx_{i}"] = None
+                
+                data[idx]["model_answer_idx"] = None
+        
+        # Single generation
+        else:
             response = responses[idx]
             data[idx]["model_response"] = response
 
             try:
-                pred_idx = parse_medqa_answer(response, item["options"])
+                pred_idx = parse_model_answer(response, item["options"])
                 data[idx]["model_answer_idx"] = pred_idx
                 valid_cnt += 1
                 if str(pred_idx) == str(item["answer_idx"]):
@@ -212,7 +292,12 @@ def eval_single_medqa_jsonl(path: str,
         base_dir = os.path.dirname(path)
         base_name = os.path.basename(path)
         root, ext = os.path.splitext(base_name)
-        out_name = f"{root}_eval_{model_name}.jsonl"
+        
+        if vote_num > 1:
+            out_name = f"{root}_eval_{model_name}_{vote_num}vote.jsonl"
+        else:
+            out_name = f"{root}_eval_{model_name}.jsonl"
+            
         out_path = os.path.join(base_dir, out_name)
 
         with open(out_path, "w", encoding="utf-8") as f:
@@ -225,7 +310,10 @@ def eval_single_medqa_jsonl(path: str,
         for err in error_details:
             print(f"id:\n{err['idx']}\n")
             print(f"Question:\n{err['question']}\n")
-            print(f"Model response:\n{err['response']}\n")
+            if vote_num > 1:
+                print(f"Model responses:\n{err.get('responses')}\n")
+            else:
+                print(f"Model response:\n{err.get('response')}\n")
             print(err["traceback"])
 
     # Print evaluation summary.
@@ -237,14 +325,15 @@ def eval_single_medqa_jsonl(path: str,
     )
     print(f"error_list = {error_list}")
 
-
 def eval_medqa(model_path: str,
                data_paths,
                visible_gpus: str,
                max_tokens: int = None,
-               print_errors: bool = True,
+               print_errors: bool = False,
                record_file: bool = False,
-               lora_path: str | None = None):
+               lora_path: str | None = None,
+               vote_num: int = 1,
+               **kwargs):
     """
     Entrance for evaluating MedQA dataset.
     
@@ -255,13 +344,15 @@ def eval_medqa(model_path: str,
     print_errors: Whether to print detailed error information of every invalid case.
     record_file: Whether to save all model answers and decisions to a file.
     lora_path: Optional path to LoRA weights to apply during evaluation.
+    vote_num: Number of answers generated for each question. Vote if there is more than 1.
+    kwargs: Additional parameters passed to the vllm.SamplingParams: e.g. temperature, top_k, top_p. In particular, the temperature is set to 0/0.5 by default (depending on whether vote_num is 1 or not).
     """
 
     model, tokenizer = load_model_and_tokenizer(
         model_path=model_path,
         visible_gpus=visible_gpus,
         dtype=torch.bfloat16,
-        enable_lora=lora_path is not None,
+        lora_path=lora_path,
         max_tokens=max_tokens,
     )
 
@@ -277,12 +368,14 @@ def eval_medqa(model_path: str,
             print_errors=print_errors,
             record_file=record_file,
             lora_path=lora_path,
+            vote_num=vote_num,
+            **kwargs
         )
 
 
 if __name__ == "__main__":
     eval_medqa(
-        model_path="/nfsdata4/Qwen/Qwen3-32B", # Replace with your local model path/online model name
+        model_path="/nfsdata2/Qwen/Qwen3-32B", # Replace with your local model path/online model name
         # lora_path="models/sft_Qwen3", # Optional: path to LoRA weights
         data_paths=[
             "dataset/MedQA/questions/US/test.jsonl", # USMLE-5options
@@ -290,8 +383,12 @@ if __name__ == "__main__":
             "dataset/MedQA/questions/US/4_options/phrases_no_exclude_test.jsonl", # USMLE-4options
             "dataset/MedQA/questions/Mainland/4_options/test.jsonl", # MCMLE-4options
         ],
-        visible_gpus="2",
-        max_tokens=32768,
+        visible_gpus="2, 3",
+        max_tokens=32768, # When vote_num > 1, it is recommended to make it smaller, such as 16384.
         print_errors=False,
         record_file=False,
+        vote_num=1, # Whether to use multi-response voting
+        temperature=0.6, # Default: 0 if vote_num == 1 else 0.5
+        # top_p=0.95, # Optional
+        # top_k=20, # Optional
     )
