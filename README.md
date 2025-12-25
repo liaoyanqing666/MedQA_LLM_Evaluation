@@ -1,11 +1,9 @@
-
 # MedQA_LLM_Evaluation
 评测大模型在 MedQA 基准上的得分（包括 USMLE 基准和 MCMLE 基准）, Evaluate LLMs’ scores on the MedQA benchmark (including USMLE benchmark and MCMLE benchmark).
 
 **English Introduction:**
 
 This project provides a convenient evaluation script for computing LLM performance on the MedQA benchmark. It supports LoRA-fine-tuned models and MoE models, and also allows generating multiple responses per question for voting (around 7 responses are recommended). Users only need to specify a model name or a local model path to run the evaluation script and obtain results. The MedQA dataset is already included in this project (located in `dataset/`), so no additional downloads are required. Commonly used benchmarks such as USMLE and MCMLE are subsets of MedQA and can therefore be evaluated directly using this project.
-
 
 The MedQA dataset comes from the [official MedQA repository](https://github.com/jind11/MedQA). It includes question sets from Mainland China medical exams (MCMLE), United States medical exams (USMLE), and Taiwan medical exams. All questions have been converted into single-choice format; MCMLE and USMLE each provide both 4-option and 5-option versions, while the Taiwan set only includes a 5-option version.
 
@@ -88,7 +86,6 @@ MedQA 数据集来源于 [MedQA 官方仓库](https://github.com/jind11/MedQA)�
 * `bench_eval.py`: A script that evaluates models using `transformers`. It has higher compatibility but is extremely slow. (Reference speed: 32B full model, bf16, dual A800 GPUs, roughly one sample per minute)
 
 * `bench_eval_vllm.py`: A script for evaluation using `vllm` to load models. This is the recommended and more up-to-date script. Only this script supports evaluation of LoRA-fine-tuned models as well as multi-sample voting. It is compatible with most commonly used base models and their fine-tuned variants (e.g., Baichuan-m2). See the [official vllm supported models documentation](https://github.com/vllm-project/vllm/blob/main/docs/models/supported_models.md) for details. It is extremely fast (reference speed: 32B full model, bf16, dual A800 GPUs, under one second per sample).
-
 
 * `bench_eval_messages.py`: Contains the message format used when the model is executed, i.e., the prompt templates. Also includes functions for parsing model outputs.
 

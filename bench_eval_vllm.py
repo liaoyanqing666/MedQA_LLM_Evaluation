@@ -223,7 +223,7 @@ def eval_single_medqa_jsonl(path: str,
                 final_answer, parsed_answers = evaluate_with_voting(
                     item_responses, 
                     item["options"],
-                    parse_model_answer
+                    parse_medqa_answer
                 )
                 
                 for i, ans in enumerate(parsed_answers, 1):
@@ -260,7 +260,7 @@ def eval_single_medqa_jsonl(path: str,
             data[idx]["model_response"] = response
 
             try:
-                pred_idx = parse_model_answer(response, item["options"])
+                pred_idx = parse_medqa_answer(response, item["options"])
                 data[idx]["model_answer_idx"] = pred_idx
                 valid_cnt += 1
                 if str(pred_idx) == str(item["answer_idx"]):
